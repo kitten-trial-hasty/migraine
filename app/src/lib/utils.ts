@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { Entry } from "@/types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -22,15 +23,8 @@ export function formatTimeInput(date: Date): string {
   return `${h}:${m}`;
 }
 
-export function parseDateTime(dateStr: string, timeStr: string): Date {
-  const [y, mo, d] = dateStr.split("-").map(Number);
-  const [h, m] = timeStr.split(":").map(Number);
-  return new Date(y, mo - 1, d, h, m);
-}
-
-export function getSeverityRank(severityId: string, categories: { id: string }[]): number {
-  const idx = categories.findIndex((c) => c.id === severityId);
-  return idx === -1 ? -1 : idx;
+export function entryTimestamp(entry: Pick<Entry, "date" | "time">): number {
+  return new Date(`${entry.date}T${entry.time || "00:00"}`).getTime();
 }
 
 export function daysBetween(a: string, b: string): number {
@@ -41,5 +35,6 @@ export function daysBetween(a: string, b: string): number {
 
 export function isWithinLastDays(dateStr: string, days: number, referenceDate?: string): boolean {
   const ref = referenceDate || formatDateInput(new Date());
-  return daysBetween(dateStr, ref) <= days && dateStr <= ref;
+  const diff = daysBetween(dateStr, ref);
+  return diff >= 0 && diff < days;
 }

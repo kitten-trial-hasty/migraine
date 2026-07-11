@@ -1,29 +1,41 @@
-// Data types for Migraine & MOH Tracker
+// Data types for the Migraine & MOH Tracker
 
-export interface Pathway {
+export type Language = "bg" | "en";
+
+export interface Medication {
   id: string;
-  label: string;
+  label_bg: string;
+  label_en: string;
   color: string;
-  cooldown_hours: number | null;
 }
 
 export interface SeverityCategory {
   id: string;
-  label: string;
+  label_bg: string;
+  label_en: string;
   color: string;
 }
 
-export interface MOHThresholds {
-  personal_ceiling_days: number;
-  clinical_threshold_days: number;
+export interface MohThresholds {
+  personalCeilingDays: number;
+  clinicalThresholdDays: number;
+}
+
+export interface AiSettings {
+  apiKey: string;
+  model: string;
+  customPrompt: string;
+  personalInfo: string;
 }
 
 export interface Settings {
-  pathways: Pathway[];
-  severity_categories: SeverityCategory[];
-  moh_thresholds: MOHThresholds;
-  ai_api_key: string;
-  ai_custom_prompt: string;
+  language: Language;
+  abortiveMedications: Medication[];
+  supportiveMedications: Medication[];
+  abortiveCooldownHours: number;
+  severityCategories: SeverityCategory[];
+  mohThresholds: MohThresholds;
+  ai: AiSettings;
 }
 
 export type Resolution = "medication" | "sleep" | "behavioral" | "unresolved";
@@ -32,10 +44,10 @@ export interface Entry {
   id: string;
   date: string; // ISO date YYYY-MM-DD
   time: string; // HH:mm
-  severity_category_id: string;
-  pathway_id: string | "none";
-  adjuvant_metoclopramide: boolean;
-  prodrome_only: boolean;
+  severityCategoryId: string;
+  abortiveMedicationId: string | null;
+  supportiveMedicationIds: string[];
+  prodromeOnly: boolean;
   resolution: Resolution;
   notes: string;
 }
@@ -43,7 +55,7 @@ export interface Entry {
 export interface AppState {
   settings: Settings;
   entries: Entry[];
-  last_export_date?: string;
+  lastExportDate?: string;
 }
 
 export type TabId = "entry" | "cooldown" | "calendar" | "ai" | "settings";
