@@ -1,20 +1,15 @@
-import { useState, useEffect, useMemo } from "react";
-import type { AppState, Pathway } from "@/types";
-import { formatDateInput, isWithinLastDays } from "@/lib/utils";
+import { useEffect, useMemo, useState } from "react";
+import type { AppState } from "@/types";
+import { cn, entryTimestamp, formatDateInput, isWithinLastDays } from "@/lib/utils";
+import { localizedLabel, useI18n, type TranslationKey } from "@/lib/i18n";
 import { AlertTriangle, CheckCircle2, Clock } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
 
 interface CooldownScreenProps {
   state: AppState;
 }
 
 function useNow() {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
@@ -22,257 +17,177 @@ function useNow() {
   return now;
 }
 
-function getMostRecentEntryForPathway(state: AppState, pathwayId: string) {
-  return state.entries
-    .filter((e) => e.pathway_id === pathwayId)
-    .sort((a, b) => {
-      const da = new Date(a.date + "T" + (a.time || "00:00")).getTime();
-      const db = new Date(b.date + "T" + (b.time || "00:00")).getTime();
-      return db - da;
-    })[0];
+function formatHHMM(ms: number): string {
+  const totalMinutes = Math.max(0, Math.floor(ms / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function formatCountdown(ms: number): string {
-  if (ms <= 0) return "Available";
-  const hours = Math.floor(ms / 3600000);
-  const mins = Math.floor((ms % 3600000) / 60000);
-  const secs = Math.floor((ms % 60000) / 1000);
-  if (hours > 0) return `${hours}h ${mins}m`;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
+function formatFreeDuration(ms: number): string {
+  const totalMinutes = Math.max(0, Math.floor(ms / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
-function formatCountUp(ms: number): string {
-  const hours = Math.floor(ms / 3600000);
-  if (hours < 24) return `+${hours}h free`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `+${days}d free`;
-  const weeks = Math.floor(days / 7);
-  return `+${weeks}w free`;
+interface Milestone {
+  key: TranslationKey;
+  minHours: number;
+  maxHours: number;
 }
 
-function getMilestone(hoursFree: number): string | null {
-  if (hoursFree >= 24 && hoursFree < 25) return "24h milestone";
-  if (hoursFree >= 48 && hoursFree < 49) return "48h milestone";
-  if (hoursFree >= 168 && hoursFree < 169) return "1 week milestone";
-  return null;
-}
-
-function getPathwayStatus(
-  pathway: Pathway,
-  state: AppState,
-  now: number
-): {
-  available: boolean;
-  display: string;
-  subtext: string | null;
-  color: string;
-} {
-  const lastEntry = getMostRecentEntryForPathway(state, pathway.id);
-  if (!lastEntry) {
-    return { available: true, display: "Never used", subtext: null, color: "#86efac" };
-  }
-
-  const lastTime = new Date(
-    lastEntry.date + "T" + (lastEntry.time || "00:00")
-  ).getTime();
-
-  if (pathway.cooldown_hours === null) {
-    // No cooldown configured - show warning
-    const hoursFree = Math.floor((now - lastTime) / 3600000);
-    return {
-      available: true,
-      display: formatCountUp(now - lastTime),
-      subtext: "Set cooldown in settings",
-      color: hoursFree > 24 ? "#86efac" : "#fcd34d",
-    };
-  }
-
-  const cooldownMs = pathway.cooldown_hours * 3600000;
-  const remaining = lastTime + cooldownMs - now;
-
-  if (remaining > 0) {
-    return {
-      available: false,
-      display: formatCountdown(remaining),
-      subtext: "On cooldown",
-      color: "#fca5a5",
-    };
-  }
-
-  const hoursFree = Math.floor((now - (lastTime + cooldownMs)) / 3600000);
-  const milestone = getMilestone(hoursFree);
-
-  return {
-    available: true,
-    display: formatCountUp(now - (lastTime + cooldownMs)),
-    subtext: milestone,
-    color: "#86efac",
-  };
-}
+const MILESTONES: Milestone[] = [
+  { key: "cooldown.milestone.absorption", minHours: 0, maxHours: 1 },
+  { key: "cooldown.milestone.peak", minHours: 1, maxHours: 4 },
+  { key: "cooldown.milestone.halfLife", minHours: 4, maxHours: 12 },
+  { key: "cooldown.milestone.resetting", minHours: 12, maxHours: 24 },
+  { key: "cooldown.milestone.normalizing", minHours: 24, maxHours: 48 },
+  { key: "cooldown.milestone.almostRecovered", minHours: 48, maxHours: 72 },
+  { key: "cooldown.milestone.fullRecovery", minHours: 72, maxHours: Infinity },
+];
 
 export function CooldownScreen({ state }: CooldownScreenProps) {
+  const { t, language } = useI18n();
   const now = useNow();
   const today = formatDateInput(new Date());
 
-  const pathwayStatuses = useMemo(() => {
-    return state.settings.pathways.map((pw) => ({
-      pathway: pw,
-      status: getPathwayStatus(pw, state, now),
-    }));
-  }, [state, now]);
+  const lastAbortiveEntry = useMemo(() => {
+    return state.entries
+      .filter((e) => e.abortiveMedicationId !== null)
+      .sort((a, b) => entryTimestamp(b) - entryTimestamp(a))[0];
+  }, [state.entries]);
 
-  const availablePathways = pathwayStatuses.filter((p) => p.status.available);
+  const cooldownMs = state.settings.abortiveCooldownHours * 3600000;
+  const lastDoseTime = lastAbortiveEntry ? entryTimestamp(lastAbortiveEntry) : null;
+  const timeSinceLastDose = lastDoseTime !== null ? now - lastDoseTime : null;
+  const cooldownRemaining = timeSinceLastDose !== null ? cooldownMs - timeSinceLastDose : null;
+  const available = cooldownRemaining === null || cooldownRemaining <= 0;
 
-  // MOH count: entries in last 30 days with naproxen or metamizole
-  const mohCount = useMemo(() => {
-    return state.entries.filter(
-      (e) =>
-        (e.pathway_id === "naproxen" || e.pathway_id === "metamizole") &&
-        isWithinLastDays(e.date, 30, today)
-    ).length;
-  }, [state.entries, today]);
+  const hoursSinceDose = timeSinceLastDose !== null ? timeSinceLastDose / 3600000 : null;
+  const activeMilestone =
+    hoursSinceDose !== null
+      ? MILESTONES.find((m) => hoursSinceDose >= m.minHours && hoursSinceDose < m.maxHours)
+      : null;
 
-  const personalCeiling = state.settings.moh_thresholds.personal_ceiling_days;
-  const clinicalThreshold = state.settings.moh_thresholds.clinical_threshold_days;
+  const lastMedLabel = lastAbortiveEntry
+    ? state.settings.abortiveMedications.find((m) => m.id === lastAbortiveEntry.abortiveMedicationId)
+    : null;
 
-  const mohPercentagePersonal = Math.min((mohCount / personalCeiling) * 100, 100);
-  const mohPercentageClinical = Math.min((mohCount / clinicalThreshold) * 100, 100);
+  const acuteDays30 = useMemo(
+    () =>
+      state.entries.filter((e) => e.abortiveMedicationId !== null && isWithinLastDays(e.date, 30, today))
+        .length,
+    [state.entries, today]
+  );
+
+  const { personalCeilingDays, clinicalThresholdDays } = state.settings.mohThresholds;
+
+  const mohLevel: "clear" | "caution" | "warning" =
+    acuteDays30 >= clinicalThresholdDays
+      ? "warning"
+      : acuteDays30 >= personalCeilingDays
+        ? "caution"
+        : "clear";
+
+  const mohColors = {
+    clear: "bg-teal-50 border-teal-200 text-teal-700",
+    caution: "bg-amber-50 border-amber-200 text-amber-700",
+    warning: "bg-red-50 border-red-200 text-red-700",
+  }[mohLevel];
+
+  const mohMessages: Record<typeof mohLevel, TranslationKey> = {
+    clear: "moh.clear",
+    caution: "moh.caution",
+    warning: "moh.warning",
+  };
+  const mohMessageKey = mohMessages[mohLevel];
 
   return (
     <div className="px-4 pt-5 pb-4 max-w-lg mx-auto">
-      <h1 className="text-xl font-semibold text-stone-800 mb-4">Cooldowns</h1>
+      <h1 className="text-xl font-semibold text-stone-800 mb-4">{t("cooldown.title")}</h1>
 
-      {/* Available summary */}
+      {/* Main timer card */}
       <div
         className={cn(
-          "mb-4 p-3 rounded-xl border flex items-center gap-3",
-          availablePathways.length > 0
-            ? "bg-teal-50 border-teal-200"
-            : "bg-red-50 border-red-200"
+          "mb-4 p-5 rounded-2xl border-2 text-center shadow-sm",
+          available ? "bg-teal-50 border-teal-200" : "bg-red-50 border-red-200"
         )}
       >
-        {availablePathways.length > 0 ? (
-          <CheckCircle2 className="w-5 h-5 text-teal-600 shrink-0" />
-        ) : (
-          <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-        )}
-        <p className="text-sm text-stone-700">
-          {availablePathways.length > 0 ? (
-            <>
-              <span className="font-medium">Available:</span>{" "}
-              {availablePathways.map((p) => p.pathway.label).join(", ") || "All pathways"}
-            </>
+        <div className="flex items-center justify-center gap-2 mb-2">
+          {available ? (
+            <CheckCircle2 className="w-6 h-6 text-teal-600" />
           ) : (
-            <span className="font-medium">All pathways on cooldown</span>
+            <AlertTriangle className="w-6 h-6 text-red-500" />
           )}
-        </p>
+          <span className={cn("text-sm font-semibold", available ? "text-teal-700" : "text-red-600")}>
+            {available ? t("cooldown.available") : t("cooldown.active")}
+          </span>
+        </div>
+
+        {lastAbortiveEntry === undefined ? (
+          <p className="text-sm text-stone-500">{t("cooldown.neverTaken")}</p>
+        ) : (
+          <>
+            <div className={cn("text-4xl font-bold tabular-nums", available ? "text-teal-700" : "text-red-600")}>
+              {available ? formatFreeDuration(Number(timeSinceLastDose)) : formatHHMM(Number(cooldownRemaining))}
+            </div>
+            <p className="mt-2 text-xs text-stone-500">
+              {available ? t("cooldown.freeFor") : t("cooldown.activeMessage")}
+            </p>
+            {lastMedLabel && (
+              <p className="mt-1 text-[11px] text-stone-400">
+                {t("cooldown.lastDose")}: {localizedLabel(lastMedLabel, language)} · {lastAbortiveEntry.date}{" "}
+                {lastAbortiveEntry.time}
+              </p>
+            )}
+          </>
+        )}
       </div>
 
-      {/* Pathway cards */}
-      <div className="space-y-3 mb-6">
-        {pathwayStatuses.map(({ pathway, status }) => (
-          <div
-            key={pathway.id}
-            className={cn(
-              "p-4 rounded-xl border-2 transition-all",
-              status.available
-                ? "border-transparent bg-white shadow-sm"
-                : "border-red-200 bg-red-50/50"
-            )}
-            style={{
-              backgroundColor: status.available ? pathway.color + "33" : undefined,
-            }}
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-sm font-semibold text-stone-800">
-                {pathway.label}
-              </span>
-              {pathway.cooldown_hours === null && (
-                <span className="text-[10px] font-medium bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                  No cooldown set
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <Clock
-                size={14}
-                className={cn(
-                  status.available ? "text-teal-600" : "text-red-500"
-                )}
-              />
-              <span
-                className={cn(
-                  "text-lg font-bold",
-                  status.available ? "text-teal-700" : "text-red-600"
-                )}
-              >
-                {status.display}
-              </span>
-            </div>
-            {status.subtext && (
-              <p className="text-xs text-stone-500 mt-1">{status.subtext}</p>
-            )}
+      {/* Milestones */}
+      {lastAbortiveEntry && (
+        <div className="mb-4 bg-white rounded-xl border border-stone-200 p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-stone-800 mb-3">{t("cooldown.milestones")}</h2>
+          <div className="space-y-1.5">
+            {MILESTONES.map((m) => {
+              const active = activeMilestone?.key === m.key;
+              return (
+                <div
+                  key={m.key}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-lg transition-colors",
+                    active ? "bg-teal-100 text-teal-800 font-medium" : "text-stone-400"
+                  )}
+                >
+                  <Clock size={12} className={active ? "text-teal-600" : "text-stone-300"} />
+                  <span className="text-xs">{t(m.key)}</span>
+                </div>
+              );
+            })}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       {/* MOH Counter */}
-      <div className="bg-white rounded-xl border border-stone-200 p-4 shadow-sm">
-        <h2 className="text-sm font-semibold text-stone-800 mb-3">
-          MOH Risk (Last 30 Days)
-        </h2>
-
-        {/* Personal ceiling */}
-        <div className="mb-3">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-stone-600">
-              Personal ceiling
-            </span>
-            <span className="text-xs font-bold text-stone-800">
-              {mohCount} / {personalCeiling} days
-            </span>
-          </div>
-          <div className="w-full h-2.5 bg-stone-100 rounded-full overflow-hidden">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all duration-500",
-                mohPercentagePersonal >= 100 ? "bg-red-400" : "bg-amber-400"
-              )}
-              style={{ width: `${mohPercentagePersonal}%` }}
-            />
-          </div>
+      <div className={cn("rounded-xl border p-4 shadow-sm", mohColors)}>
+        <h2 className="text-sm font-semibold mb-2">{t("moh.title")}</h2>
+        <p className="text-xs font-medium mb-3">{t(mohMessageKey)}</p>
+        <div className="flex items-center justify-between text-xs mb-1">
+          <span>{t("moh.acuteDays")}</span>
+          <span className="font-bold">{acuteDays30}</span>
         </div>
-
-        {/* Clinical threshold */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-stone-600">
-              Clinical threshold
-            </span>
-            <span className="text-xs font-bold text-stone-800">
-              {mohCount} / {clinicalThreshold} days
-            </span>
-          </div>
-          <div className="w-full h-2.5 bg-stone-100 rounded-full overflow-hidden">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all duration-500",
-                mohPercentageClinical >= 100 ? "bg-red-400" : "bg-teal-400"
-              )}
-              style={{ width: `${mohPercentageClinical}%` }}
-            />
-          </div>
+        <div className="flex items-center justify-between text-xs mb-1">
+          <span>{t("moh.personalCeiling")}</span>
+          <span className="font-medium">{personalCeilingDays}</span>
         </div>
-
-        {mohCount >= personalCeiling && (
-          <div className="mt-3 flex items-center gap-2 text-red-600">
-            <AlertTriangle size={14} />
-            <span className="text-xs font-medium">
-              Approaching personal MOH ceiling
-            </span>
-          </div>
-        )}
+        <div className="flex items-center justify-between text-xs">
+          <span>{t("moh.clinicalThreshold")}</span>
+          <span className="font-medium">{clinicalThresholdDays}</span>
+        </div>
       </div>
     </div>
   );

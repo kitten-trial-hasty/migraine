@@ -1,12 +1,8 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { AppState, Entry } from "@/types";
+import { cn } from "@/lib/utils";
+import { localizedLabel, useI18n } from "@/lib/i18n";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
 
 interface CalendarScreenProps {
   state: AppState;
@@ -21,15 +17,29 @@ function getFirstDayOfMonth(year: number, month: number): number {
   return new Date(year, month, 1).getDay();
 }
 
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 export function CalendarScreen({ state, onEditEntry }: CalendarScreenProps) {
+  const { t, language } = useI18n();
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
 
+  const locale = language === "bg" ? "bg-BG" : "en-US";
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);
   const firstDay = getFirstDayOfMonth(viewYear, viewMonth);
+
+  const weekdayLabels = useMemo(() => {
+    const base = new Date(2024, 0, 7); // a Sunday
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(base);
+      d.setDate(base.getDate() + i);
+      return d.toLocaleDateString(locale, { weekday: "short" });
+    });
+  }, [locale]);
+
+  const severityRank = useMemo(
+    () => new Map(state.settings.severityCategories.map((c, i) => [c.id, i])),
+    [state.settings.severityCategories]
+  );
 
   const monthEntries = useMemo(() => {
     const map = new Map<string, Entry[]>();
@@ -67,36 +77,15 @@ export function CalendarScreen({ state, onEditEntry }: CalendarScreenProps) {
     setViewMonth(today.getMonth());
   }
 
-  function getDayColor(dateStr: string): string | null {
-    const entries = monthEntries.get(dateStr);
-    if (!entries || entries.length === 0) return null;
-    // Use the most severe
-    let mostSevere = entries[0];
-    let highestRank = -1;
-    const catIndex = new Map(state.settings.severity_categories.map((c, i) => [c.id, i]));
-    for (const e of entries) {
-      const rank = catIndex.get(e.severity_category_id) ?? -1;
-      if (rank > highestRank) {
-        highestRank = rank;
-        mostSevere = e;
-      }
-    }
-    const cat = state.settings.severity_categories.find(
-      (c) => c.id === mostSevere.severity_category_id
-    );
-    return cat?.color || null;
+  function worstEntry(entries: Entry[]): Entry {
+    return entries.reduce((worst, e) => {
+      const rank = severityRank.get(e.severityCategoryId) ?? -1;
+      const worstRank = severityRank.get(worst.severityCategoryId) ?? -1;
+      return rank > worstRank ? e : worst;
+    }, entries[0]);
   }
 
-  function hasPathway(dateStr: string): boolean {
-    const entries = monthEntries.get(dateStr);
-    return entries?.some((e) => e.pathway_id !== "none") ?? false;
-  }
-
-  function getEntriesForDay(dateStr: string): Entry[] {
-    return monthEntries.get(dateStr) || [];
-  }
-
-  const monthName = new Date(viewYear, viewMonth).toLocaleString("en-US", {
+  const monthLabel = new Date(viewYear, viewMonth).toLocaleDateString(locale, {
     month: "long",
     year: "numeric",
   });
@@ -107,103 +96,78 @@ export function CalendarScreen({ state, onEditEntry }: CalendarScreenProps) {
 
   return (
     <div className="px-4 pt-5 pb-4 max-w-lg mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold text-stone-800">Calendar</h1>
+        <h1 className="text-xl font-semibold text-stone-800">{t("calendar.title")}</h1>
         <button
           onClick={goToToday}
           className="text-xs font-medium text-teal-600 hover:text-teal-700 px-3 py-1.5 rounded-lg bg-teal-50"
         >
-          Today
+          {t("common.today")}
         </button>
       </div>
 
-      {/* Month navigation */}
       <div className="flex items-center justify-between mb-4">
-        <button
-          onClick={prevMonth}
-          className="p-2 rounded-xl hover:bg-stone-100 transition-colors"
-        >
+        <button onClick={prevMonth} className="p-2 rounded-xl hover:bg-stone-100 transition-colors">
           <ChevronLeft size={20} className="text-stone-600" />
         </button>
-        <h2 className="text-base font-semibold text-stone-700">{monthName}</h2>
-        <button
-          onClick={nextMonth}
-          className="p-2 rounded-xl hover:bg-stone-100 transition-colors"
-        >
+        <h2 className="text-base font-semibold text-stone-700 capitalize">{monthLabel}</h2>
+        <button onClick={nextMonth} className="p-2 rounded-xl hover:bg-stone-100 transition-colors">
           <ChevronRight size={20} className="text-stone-600" />
         </button>
       </div>
 
-      {/* Day headers */}
       <div className="grid grid-cols-7 gap-1 mb-1">
-        {DAYS.map((d) => (
-          <div key={d} className="text-center text-[10px] font-medium text-stone-400 py-1">
+        {weekdayLabels.map((d, i) => (
+          <div key={i} className="text-center text-[10px] font-medium text-stone-400 py-1 capitalize">
             {d}
           </div>
         ))}
       </div>
 
-      {/* Calendar grid */}
       <div className="grid grid-cols-7 gap-1">
         {cells.map((day, i) => {
-          if (day === null) {
-            return <div key={`empty-${i}`} className="aspect-square" />;
-          }
+          if (day === null) return <div key={`empty-${i}`} className="aspect-square" />;
+
           const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-          const bgColor = getDayColor(dateStr);
-          const pwUsed = hasPathway(dateStr);
+          const entries = monthEntries.get(dateStr) || [];
+          const worst = entries.length > 0 ? worstEntry(entries) : null;
+          const cat = worst
+            ? state.settings.severityCategories.find((c) => c.id === worst.severityCategoryId)
+            : null;
+          const abortiveUsed = entries.some((e) => e.abortiveMedicationId !== null);
           const isToday =
-            today.getFullYear() === viewYear &&
-            today.getMonth() === viewMonth &&
-            today.getDate() === day;
-          const entries = getEntriesForDay(dateStr);
+            today.getFullYear() === viewYear && today.getMonth() === viewMonth && today.getDate() === day;
 
           return (
             <button
               key={day}
-              onClick={() => {
-                if (entries.length > 0) {
-                  onEditEntry(entries[0]);
-                }
-              }}
+              onClick={() => entries.length > 0 && onEditEntry(entries[0])}
               className={cn(
                 "aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all",
-                bgColor ? "hover:scale-105" : "hover:bg-stone-100",
-                isToday && !bgColor && "border-2 border-teal-400 bg-teal-50"
+                cat ? "hover:scale-105" : "hover:bg-stone-100",
+                isToday && !cat && "border-2 border-teal-400 bg-teal-50"
               )}
-              style={bgColor ? { backgroundColor: bgColor + "77" } : undefined}
+              style={cat ? { backgroundColor: cat.color + "99" } : undefined}
             >
-              <span
-                className={cn(
-                  "text-xs font-medium",
-                  isToday ? "text-teal-700" : "text-stone-700"
-                )}
-              >
+              <span className={cn("text-xs font-medium", isToday ? "text-teal-700" : "text-stone-700")}>
                 {day}
               </span>
-              {pwUsed && (
-                <div className="absolute bottom-1 w-1.5 h-1.5 rounded-full bg-stone-500" />
-              )}
+              {abortiveUsed && <div className="absolute bottom-1 w-1.5 h-1.5 rounded-full bg-stone-600" />}
             </button>
           );
         })}
       </div>
 
-      {/* Legend */}
       <div className="mt-5 flex flex-wrap gap-2">
-        {state.settings.severity_categories.map((cat) => (
+        {state.settings.severityCategories.map((cat) => (
           <div key={cat.id} className="flex items-center gap-1.5">
-            <div
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: cat.color }}
-            />
-            <span className="text-[10px] text-stone-500">{cat.label}</span>
+            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.color }} />
+            <span className="text-[10px] text-stone-500">{localizedLabel(cat, language)}</span>
           </div>
         ))}
         <div className="flex items-center gap-1.5 ml-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-stone-500" />
-          <span className="text-[10px] text-stone-500">Pathway used</span>
+          <div className="w-1.5 h-1.5 rounded-full bg-stone-600" />
+          <span className="text-[10px] text-stone-500">{t("calendar.abortiveUsed")}</span>
         </div>
       </div>
     </div>

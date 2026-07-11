@@ -1,59 +1,80 @@
 import type { AppState } from "@/types";
 
-export const DEFAULT_AI_PROMPT = `You're reviewing a personal migraine/MOH tracking log. Given this summary of the last 30 days, identify: (1) what's going well — improving trends, cooldown discipline, growing medication-free streaks; (2) what needs attention — approaching MOH thresholds, any pathway used before its cooldown expired, rising attack frequency, or declining prodrome-prediction accuracy. Reply only as JSON: {"good": [...], "watch": [...]}, each a list of short plain-language sentences.`;
+export const DEFAULT_AI_PROMPT = `You are reviewing a personal migraine/MOH tracking log. Given the detailed data and background information, identify:
+1) What's going well — improving trends, cooldown discipline, growing medication‑free streaks.
+2) What needs attention — approaching MOH thresholds, cooldown violations, rising attack frequency, declining prodrome‑prediction accuracy.
+Reply ONLY as JSON: {"good": [...], "watch": [...]}, each a list of short plain‑language sentences.`;
 
 export const defaultState: AppState = {
   settings: {
-    pathways: [
-      { id: "naproxen", label: "Naproxen 550", color: "#86efac", cooldown_hours: 96 },
-      { id: "metamizole", label: "Metamizole 1000", color: "#5eead4", cooldown_hours: 96 },
-      { id: "pregabalin_tofisopam", label: "Pregabalin + Tofisopam", color: "#93c5fd", cooldown_hours: null },
-      { id: "tofisopam", label: "Tofisopam alone", color: "#d8b4fe", cooldown_hours: null },
+    language: "bg",
+    abortiveMedications: [
+      { id: "naproxen", label_bg: "Напроксен 550", label_en: "Naproxen 550", color: "#C8E6C9" },
+      { id: "metamizole", label_bg: "Метамизол 1000", label_en: "Metamizole 1000", color: "#B3E5FC" },
     ],
-    severity_categories: [
-      { id: "clear", label: "\u0427\u0438\u0441\u0442", color: "#86efac" },
-      { id: "none", label: "\u0411\u0435\u0437 \u0442\u0435\u0436\u0435\u0441\u0442", color: "#bef264" },
-      { id: "mild", label: "\u041c\u0430\u043b\u043a\u043e \u0442\u0435\u0436\u0435\u0441\u0442", color: "#fcd34d" },
-      { id: "more", label: "\u041f\u043e\u0432\u0435\u0447\u0435 \u0442\u0435\u0436\u0435\u0441\u0442", color: "#fdba74" },
-      { id: "severe", label: "\u0422\u0435\u0436\u043a\u043e", color: "#fca5a5" },
+    supportiveMedications: [
+      {
+        id: "metoclopramide",
+        label_bg: "Метоклопрамид (Деган)",
+        label_en: "Metoclopramide (Degan)",
+        color: "#E1BEE7",
+      },
     ],
-    moh_thresholds: {
-      personal_ceiling_days: 10,
-      clinical_threshold_days: 15,
+    abortiveCooldownHours: 72,
+    severityCategories: [
+      { id: "clear", label_bg: "Чист", label_en: "Clear", color: "#C8E6C9" },
+      { id: "none", label_bg: "Без тежест", label_en: "No Heaviness", color: "#F0F4C3" },
+      { id: "mild", label_bg: "Малко тежест", label_en: "Mild Heaviness", color: "#FFE082" },
+      { id: "more", label_bg: "Повече тежест", label_en: "More Heaviness", color: "#FFCC80" },
+      { id: "severe", label_bg: "Тежко", label_en: "Severe", color: "#EF9A9A" },
+    ],
+    mohThresholds: {
+      personalCeilingDays: 10,
+      clinicalThresholdDays: 15,
     },
-    ai_api_key: "",
-    ai_custom_prompt: DEFAULT_AI_PROMPT,
+    ai: {
+      apiKey: "",
+      model: "openai/gpt-4o",
+      customPrompt: DEFAULT_AI_PROMPT,
+      personalInfo: "",
+    },
   },
   entries: [],
 };
 
 const STORAGE_KEY = "migraine_app_state";
 
+function cloneDefault(): AppState {
+  return JSON.parse(JSON.stringify(defaultState));
+}
+
 export function loadState(): AppState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return JSON.parse(JSON.stringify(defaultState));
+    if (!raw) return cloneDefault();
     const parsed = JSON.parse(raw);
-    // Validate required keys
     if (!parsed.settings || !parsed.entries) {
-      return JSON.parse(JSON.stringify(defaultState));
+      return cloneDefault();
     }
-    // Merge with defaults to ensure new fields exist
     return {
-      ...defaultState,
+      ...cloneDefault(),
       ...parsed,
       settings: {
-        ...defaultState.settings,
+        ...cloneDefault().settings,
         ...parsed.settings,
-        moh_thresholds: {
-          ...defaultState.settings.moh_thresholds,
-          ...parsed.settings.moh_thresholds,
+        mohThresholds: {
+          ...defaultState.settings.mohThresholds,
+          ...parsed.settings.mohThresholds,
+        },
+        ai: {
+          ...defaultState.settings.ai,
+          ...parsed.settings.ai,
         },
       },
       entries: parsed.entries || [],
     };
   } catch {
-    return JSON.parse(JSON.stringify(defaultState));
+    return cloneDefault();
   }
 }
 
@@ -63,4 +84,10 @@ export function saveState(state: AppState): void {
   } catch (e) {
     console.error("Failed to save state:", e);
   }
+}
+
+export function isValidBackup(data: unknown): data is AppState {
+  if (!data || typeof data !== "object") return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.settings === "object" && Array.isArray(obj.entries);
 }
